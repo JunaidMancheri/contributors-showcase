@@ -103,7 +103,10 @@ jobs:
           });
 
           // Write validation errors to a file for GitHub Actions to read
-          fs.writeFileSync('validation-errors.txt', validationErrors.join('\n'));
+          if (hasErrors) {
+            fs.writeFileSync('validation-errors.txt', validationErrors.join('\n'));
+          }
+          // Exit with error code if validation failed
           process.exit(hasErrors ? 1 : 0);
           EOF
 
@@ -115,19 +118,34 @@ jobs:
       - name: Read validation errors
         if: steps.validate.outcome == 'failure'
         id: errors
+        continue-on-error: true
         run: |
-          ERRORS=$(cat validation-errors.txt)
-          echo "errors<<EOF" >> $GITHUB_ENV
-          echo "$ERRORS" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          if [ -f validation-errors.txt ]; then
+            ERRORS=$(cat validation-errors.txt)
+            echo "errors<<EOF" >> $GITHUB_ENV
+            echo "$ERRORS" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          fi
 
       - name: Comment on PR
         if: steps.validate.outcome == 'failure'
         uses: actions/github-script@v6
         with:
           script: |
-            const errors = process.env.errors;
-            const message = `❌ JSON Validation Failed\n\n${errors}\n\n### Please fix these issues and update your pull request.\n\nRefer to our [Contributing Guidelines](../blob/main/CONTRIBUTING.md) for more details.`;
+            const errors = process.env.errors || 'JSON validation failed';
+            const message = `## ❌ JSON Validation Failed
+
+            ${errors}
+
+            ### How to fix:
+            1. Review the errors above
+            2. Make the necessary corrections to your JSON file
+            3. Commit and push your changes
+            4. The validation will run again automatically
+
+            For more details, please check our [Contributing Guidelines](../blob/main/CONTRIBUTING.md).
+
+            Need help? Feel free to ask questions in this PR.`;
             
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -136,6 +154,6 @@ jobs:
               body: message
             });
 
-      - name: Check validation result
+      - name: Fail workflow if validation failed
         if: steps.validate.outcome == 'failure'
         run: exit 1 
