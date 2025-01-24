@@ -8,6 +8,9 @@ on:
 jobs:
   validate-json:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write  # Required to comment on PRs
+    
     steps:
       - uses: actions/checkout@v3
       
@@ -21,6 +24,9 @@ jobs:
           cat > validate-json.js << 'EOF'
           const fs = require('fs');
           const path = require('path');
+
+          // Store validation errors for PR comment
+          let validationErrors = [];
 
           // Schema for contributor JSON files
           const schema = {
@@ -66,7 +72,7 @@ jobs:
               
               return true;
             } catch (error) {
-              console.error(`Error in ${path.basename(filePath)}: ${error.message}`);
+              validationErrors.push(`Error in ${path.basename(filePath)}: ${error.message}`);
               return false;
             }
           }
@@ -86,7 +92,7 @@ jobs:
             const content = JSON.parse(fs.readFileSync(filePath, 'utf8'));
             
             if (username !== content.github.toLowerCase()) {
-              console.error(`Error in ${file}: Filename must match GitHub username in lowercase`);
+              validationErrors.push(`Error in ${file}: Filename must match GitHub username in lowercase`);
               hasErrors = true;
               return;
             }
@@ -96,8 +102,40 @@ jobs:
             }
           });
 
+          // Write validation errors to a file for GitHub Actions to read
+          fs.writeFileSync('validation-errors.txt', validationErrors.join('\n'));
           process.exit(hasErrors ? 1 : 0);
           EOF
 
       - name: Validate JSON files
-        run: node validate-json.js 
+        id: validate
+        continue-on-error: true
+        run: node validate-json.js
+
+      - name: Read validation errors
+        if: steps.validate.outcome == 'failure'
+        id: errors
+        run: |
+          ERRORS=$(cat validation-errors.txt)
+          echo "errors<<EOF" >> $GITHUB_ENV
+          echo "$ERRORS" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Comment on PR
+        if: steps.validate.outcome == 'failure'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const errors = process.env.errors;
+            const message = `❌ JSON Validation Failed\n\n${errors}\n\n### Please fix these issues and update your pull request.\n\nRefer to our [Contributing Guidelines](../blob/main/CONTRIBUTING.md) for more details.`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: message
+            });
+
+      - name: Check validation result
+        if: steps.validate.outcome == 'failure'
+        run: exit 1 
